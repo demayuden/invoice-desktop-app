@@ -1,16 +1,14 @@
 # app.py
 """
-InvoiceHome-style desktop invoice app (complete)
-- Classic layout (Option 2)
-- Minimal Apple-like UI
-- Classic business-style PDF output
-- tkcalendar DateEntry for dates
-- Delete '✖' column on each item (click to remove)
-- Tax input as percent (e.g., 6 => 6%)
-- Live update totals when tax/discount change
+InvoiceHome-style desktop invoice app (complete, updated)
+- Receipts tab now shows ONLY PDFs
+- New "My Reports" tab shows parsed JSON metadata in a table (no images)
+- Export CSV & open PDF from reports
+- Everything else same as previous version (tkcalendar, signature, logo trim, delete ✖, tax percent)
 """
 import os
 import io
+import csv
 import json
 from datetime import date, timedelta
 import tkinter as tk
@@ -333,6 +331,7 @@ class InvoiceApp(tk.Tk):
         self._create_menu()
         self.create_widgets()
         self.load_receipts_list()
+        self.load_reports_table()
         self.set_next_invoice_number()
         self.update_totals()
 
@@ -498,13 +497,13 @@ class InvoiceApp(tk.Tk):
         save_frame.pack(fill=tk.X, pady=(10,8), padx=8)
         ttk.Button(save_frame, text="💾 Save Invoice", command=self.save_invoice_fullwidth, style="Accent.TButton").pack(fill=tk.X)
 
-        # receipts tab
+        # Receipts tab (PDFs only)
         receipts_tab = ttk.Frame(notebook)
         notebook.add(receipts_tab, text="Receipts")
 
         rtop = ttk.Frame(receipts_tab, padding=8)
         rtop.pack(fill=tk.X)
-        ttk.Label(rtop, text="Saved Invoices", font=("Helvetica", 12, "bold")).pack(side=tk.LEFT)
+        ttk.Label(rtop, text="Saved PDFs", font=("Helvetica", 12, "bold")).pack(side=tk.LEFT)
         ttk.Button(rtop, text="Refresh", command=self.load_receipts_list).pack(side=tk.RIGHT)
         ttk.Button(rtop, text="Open Selected", command=self.open_selected_receipt).pack(side=tk.RIGHT, padx=6)
         ttk.Button(rtop, text="Delete Selected", command=self.delete_selected_receipt).pack(side=tk.RIGHT)
@@ -512,13 +511,51 @@ class InvoiceApp(tk.Tk):
         self.receipts_listbox = tk.Listbox(receipts_tab)
         self.receipts_listbox.pack(fill=tk.BOTH, expand=True, padx=8, pady=6)
 
-    # ---------- receipts helpers ----------
+        # Reports tab (JSON metadata)
+        reports_tab = ttk.Frame(notebook)
+        notebook.add(reports_tab, text="My Reports")
+
+        rtop2 = ttk.Frame(reports_tab, padding=8)
+        rtop2.pack(fill=tk.X)
+        ttk.Label(rtop2, text="Invoice Reports", font=("Helvetica", 12, "bold")).pack(side=tk.LEFT)
+        ttk.Button(rtop2, text="Refresh", command=self.load_reports_table).pack(side=tk.RIGHT)
+        ttk.Button(rtop2, text="Export CSV", command=self.export_reports_csv).pack(side=tk.RIGHT, padx=6)
+        ttk.Button(rtop2, text="Open PDF", command=self.open_pdf_from_report).pack(side=tk.RIGHT, padx=6)
+
+        # reports treeview
+        cols = ("customer","invoice","date","due_date","contact","tax_pct","discount","subtotal","tax_amt","total")
+        self.reports_tree = ttk.Treeview(reports_tab, columns=cols, show="headings", selectmode="browse")
+        headings = {
+            "customer":"Customer",
+            "invoice":"Invoice No",
+            "date":"Date",
+            "due_date":"Due Date",
+            "contact":"Contact",
+            "tax_pct":"Tax %",
+            "discount":"Discount",
+            "subtotal":"Subtotal",
+            "tax_amt":"Tax Amt",
+            "total":"Total"
+        }
+        for c in cols:
+            self.reports_tree.heading(c, text=headings[c])
+            if c == "customer":
+                self.reports_tree.column(c, width=220)
+            elif c == "invoice":
+                self.reports_tree.column(c, width=80, anchor=tk.CENTER)
+            else:
+                self.reports_tree.column(c, width=90, anchor=tk.CENTER)
+        self.reports_tree.pack(fill=tk.BOTH, expand=True, padx=8, pady=6)
+        self.reports_tree.bind("<Double-1>", lambda e: self.view_report_json())
+
+    # ---------- receipts helpers (PDFs only) ----------
     def load_receipts_list(self):
         try:
             if not hasattr(self, "receipts_listbox"):
                 return
             self.receipts_listbox.delete(0, tk.END)
-            entries = [f for f in os.listdir(self.invoices_folder) if f.endswith(".pdf") or f.endswith(".json")]
+            # list only PDF files
+            entries = [f for f in os.listdir(self.invoices_folder) if f.lower().endswith(".pdf")]
             entries.sort(reverse=True)
             for e in entries:
                 self.receipts_listbox.insert(tk.END, e)
@@ -551,10 +588,139 @@ class InvoiceApp(tk.Tk):
             if not messagebox.askyesno("Delete", f"Delete {name}?"):
                 return
             full = os.path.join(self.invoices_folder, name)
+            # when deleting a PDF we may also remove the matching JSON if desired - keep JSON by default
             os.remove(full)
             self.load_receipts_list()
+            # refresh reports since a PDF was removed
+            self.load_reports_table()
         except Exception as ex:
             messagebox.showerror("Error", f"Failed to delete:\n{ex}")
+
+    # ---------- reports (JSON metadata) ----------
+    def load_reports_table(self):
+        """Load JSON metadata files and populate reports_tree."""
+        try:
+            # clear existing
+            for r in self.reports_tree.get_children():
+                self.reports_tree.delete(r)
+
+            json_files = [f for f in os.listdir(self.invoices_folder) if f.lower().endswith(".json")]
+            json_files.sort(reverse=True)
+
+            for jf in json_files:
+                path = os.path.join(self.invoices_folder, jf)
+                try:
+                    with open(path, "r", encoding="utf-8") as fh:
+                        data = json.load(fh)
+                except Exception:
+                    continue
+
+                # parse fields safely
+                customer = data.get("bill_to", {}).get("name") or data.get("bill_to", {}).get("customer") or ""
+                invoice_no = data.get("invoice_number") or os.path.splitext(jf)[0]
+                dt = data.get("date") or ""
+                due = data.get("due_date") or data.get("due") or ""
+                contact = data.get("bill_to", {}).get("contact", "") or data.get("contact", "")
+                tax_pct = data.get("tax_rate") if data.get("tax_rate") is not None else data.get("tax_percent") or 0.0
+                try:
+                    tax_pct = float(tax_pct)
+                except Exception:
+                    tax_pct = 0.0
+                try:
+                    discount = float(data.get("discount", 0.0) or 0.0)
+                except Exception:
+                    discount = 0.0
+
+                # compute subtotal from items if available
+                subtotal = 0.0
+                for it in data.get("items", []):
+                    try:
+                        q = float(it.get("qty", 0))
+                        u = float(it.get("unit_price", it.get("unit", 0) or 0))
+                        subtotal += q * u
+                    except Exception:
+                        pass
+                tax_amt = subtotal * (tax_pct / 100.0)
+                total = subtotal + tax_amt - discount
+
+                row = (customer, invoice_no, dt, due, contact, f"{tax_pct:.2f}", f"{discount:.2f}", f"{subtotal:.2f}", f"{tax_amt:.2f}", f"{total:.2f}")
+                self.reports_tree.insert("", "end", values=row, tags=(jf,))
+        except Exception as ex:
+            print("load_reports_table failed:", ex)
+
+    def view_report_json(self):
+        """Show raw JSON for selected report (popup)."""
+        try:
+            sel = self.reports_tree.selection()
+            if not sel:
+                return
+            item = sel[0]
+            tags = self.reports_tree.item(item, "tags") or []
+            if not tags:
+                messagebox.showinfo("Report", "No JSON backing file found.")
+                return
+            jf = tags[0]
+            path = os.path.join(self.invoices_folder, jf)
+            with open(path, "r", encoding="utf-8") as fh:
+                text = fh.read()
+            # show in scrolled text dialog
+            top = tk.Toplevel(self)
+            top.title(f"JSON — {jf}")
+            txt = tk.Text(top, wrap=tk.NONE)
+            txt.insert("1.0", text)
+            txt.pack(fill=tk.BOTH, expand=True)
+            # small buttons
+            btn = ttk.Frame(top)
+            btn.pack(fill=tk.X)
+            ttk.Button(btn, text="Close", command=top.destroy).pack(side=tk.RIGHT, padx=6, pady=6)
+        except Exception as ex:
+            messagebox.showerror("Error", f"Failed to open JSON:\n{ex}")
+
+    def open_pdf_from_report(self):
+        """Open the PDF file that matches the selected report (same base name)."""
+        try:
+            sel = self.reports_tree.selection()
+            if not sel:
+                return
+            tags = self.reports_tree.item(sel[0], "tags") or []
+            if not tags:
+                messagebox.showinfo("Open PDF", "No JSON file selected.")
+                return
+            jf = tags[0]
+            base = os.path.splitext(jf)[0]
+            pdf_fn = os.path.join(self.invoices_folder, base + ".pdf")
+            if not os.path.exists(pdf_fn):
+                messagebox.showinfo("Open PDF", f"No PDF found for {base}.")
+                return
+            if os.name == "nt":
+                os.startfile(pdf_fn)
+            elif os.name == "posix":
+                import subprocess
+                subprocess.Popen(["xdg-open", pdf_fn])
+            else:
+                messagebox.showinfo("Open PDF", pdf_fn)
+        except Exception as ex:
+            messagebox.showerror("Error", f"Failed to open PDF:\n{ex}")
+
+    def export_reports_csv(self):
+        """Export reports table to CSV."""
+        try:
+            csv_path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV","*.csv")])
+            if not csv_path:
+                return
+            rows = []
+            for iid in self.reports_tree.get_children():
+                vals = self.reports_tree.item(iid, "values")
+                rows.append(vals)
+            header = ["Customer","Invoice No","Date","Due Date","Contact","Tax %","Discount","Subtotal","Tax Amt","Total"]
+            with open(csv_path, "w", newline="", encoding="utf-8") as fh:
+                w = csv.writer(fh)
+                w.writerow(header)
+                for r in rows:
+                    w.writerow(r)
+            messagebox.showinfo("Exported", f"Exported {len(rows)} rows to:\n{csv_path}")
+        except Exception as ex:
+            messagebox.showerror("Export Failed", f"{ex}")
 
     # ---------- invoice numbering ----------
     def invoice_list_files(self):
@@ -666,21 +832,6 @@ class InvoiceApp(tk.Tk):
         self.signature_thumbnail = None
         self.update_signature_preview()
 
-    # due date helper (optional fallback)
-    def pick_due_date(self):
-        try:
-            base = date.fromisoformat(self.date_ent.get().strip())
-        except Exception:
-            base = date.today()
-        default = base + timedelta(days=15)
-        ans = simpledialog.askstring("Due Date", "Enter due date (YYYY-MM-DD):", initialvalue=default.isoformat())
-        if ans:
-            try:
-                _ = date.fromisoformat(ans.strip())
-                self.due_ent.set_date(ans.strip())
-            except Exception:
-                messagebox.showerror("Invalid date", "Please enter date in YYYY-MM-DD format")
-
     # ---------- items ----------
     def open_add_item(self):
         dlg = AddItemDialog(self, title="Add Item")
@@ -783,6 +934,7 @@ class InvoiceApp(tk.Tk):
 
         messagebox.showinfo("Saved", f"Saved PDF:\n{pdf_fn}\n\nSaved JSON:\n{json_fn}")
         self.load_receipts_list()
+        self.load_reports_table()
         try:
             self.set_next_invoice_number()
         except Exception:
