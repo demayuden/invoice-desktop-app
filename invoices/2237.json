@@ -1,0 +1,29 @@
+{
+  "company_name": "hhh",
+  "company_address": "hhh\nkl\nkl",
+  "invoice_number": "2237",
+  "date": "2025-12-02",
+  "bill_to": {
+    "name": "dy",
+    "contact": "333333323"
+  },
+  "items": [
+    {
+      "desc": "deffef",
+      "qty": 1.0,
+      "unit_price": 2333.0
+    },
+    {
+      "desc": "efee",
+      "qty": 1.0,
+      "unit_price": 33.0
+    }
+  ],
+  "tax_rate": 0.0,
+  "discount": 0.0,
+  "notes": "Payment is due within 15 days",
+  "logo_path": "C:/Users/User/OneDrive/Desktop/project pics/background.png",
+  "signature_path": null,
+  "due_date": "2025-12-17",
+  "signature_saved_in_pdf_only": true
+}

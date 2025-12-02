@@ -441,7 +441,8 @@ class SidebarApp(tk.Tk):
         }
 
         # sidebar buttons
-        ttk.Button(sidebar, text=" Home", image=self.icons["home"], compound="left", command=lambda: self.new_invoice()).pack(fill="x", padx=10, pady=(12,6))
+        # <-- FIX: Home now shows the welcome page instead of creating a new invoice directly -->
+        ttk.Button(sidebar, text=" Home", image=self.icons["home"], compound="left", command=lambda: self.show_page("home")).pack(fill="x", padx=10, pady=(12,6))
         ttk.Button(sidebar, text=" Invoice", image=self.icons["invoice"], compound="left", command=lambda: self.show_page("invoice")).pack(fill="x", padx=10, pady=6)
         ttk.Button(sidebar, text=" Receipts", image=self.icons["receipts"], compound="left", command=lambda: self.show_page("receipts")).pack(fill="x", padx=10, pady=6)
         ttk.Button(sidebar, text=" Reports", image=self.icons["reports"], compound="left", command=lambda: self.show_page("reports")).pack(fill="x", padx=10, pady=6)
@@ -734,8 +735,11 @@ class SidebarApp(tk.Tk):
     def export_reports_csv(self):
         try:
             csv_path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV","*.csv")])
-            if not csv_path:
-                return
+        except Exception:
+            csv_path = None
+        if not csv_path:
+            return
+        try:
             rows = []
             for iid in self.reports_tree.get_children():
                 vals = self.reports_tree.item(iid, "values")
@@ -896,8 +900,10 @@ class InvoicePage(ttk.Frame):
         self.tree.column("desc", width=540); self.tree.column("qty", width=80, anchor=tk.E)
         self.tree.column("unit", width=120, anchor=tk.E); self.tree.column("amt", width=120, anchor=tk.E)
         self.tree.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
-        self.tree.bind("<Button-1>", self.on_tree_click)
+        self.tree.bind("<Button-1>", self.on_tree_click)   # keep existing delete/✖ behavior
         self.tree.bind("<Delete>", lambda e: self.remove_selected_item())
+        self.tree.bind("<Double-1>", self.on_tree_double_click)  # new: double-click to edit item
+
 
         right_tot = ttk.Frame(items_frame, width=300)
         right_tot.pack(side=tk.RIGHT, fill=tk.Y, padx=(8,0)); right_tot.pack_propagate(False)
@@ -1027,6 +1033,53 @@ class InvoicePage(ttk.Frame):
             except Exception as ex:
                 print("Failed to remove item:", ex)
             self.app.update_totals()
+    
+    def on_tree_double_click(self, event): 
+        """Handle double-click on tree: if a row (not the header) is clicked, launch item editor."""
+        try:
+            row_id = self.tree.identify_row(event.y)
+            if not row_id:
+                return
+            # ignore clicks on the delete column (col #1) to avoid conflict
+            col = self.tree.identify_column(event.x)
+            # If user double-click on delete column we still ask; but preferred to open editor on other columns
+            self.edit_item_by_row(row_id)
+        except Exception as ex:
+            print("on_tree_double_click failed:", ex)
+
+    def edit_item_by_row(self, row_id):
+        """Open AddItemDialog prefilled with the selected item's data and update it."""
+        try:
+            # determine index in items
+            idx = self.tree.index(row_id)
+            if idx < 0 or idx >= len(self.app.items):
+                # nothing to edit (safety)
+                return
+
+            current = self.app.items[idx]
+            initial = {
+                "desc": current.get("desc", ""),
+                "qty": current.get("qty", 0),
+                "unit_price": current.get("unit_price", current.get("unit", 0) or 0.0)
+            }
+
+            dlg = AddItemDialog(self, title="Edit Item", initial=initial)
+            if not getattr(dlg, "result", None):
+                return
+
+            new_item = dlg.result
+            # update internal items list
+            self.app.items[idx] = new_item
+
+            # update tree row display
+            amt = new_item["qty"] * new_item["unit_price"]
+            qty_display = str(int(new_item["qty"]) if float(new_item["qty"]).is_integer() else new_item["qty"])
+            self.tree.item(row_id, values=("✖", new_item["desc"], qty_display, f"{new_item['unit_price']:.2f}", f"{amt:.2f}"))
+
+            # refresh totals
+            self.app.update_totals()
+        except Exception as ex:
+            print("edit_item_by_row failed:", ex)
 
     # ---------- signature ----------
     def open_signature(self):
@@ -1352,21 +1405,46 @@ class SignatureCanvas(tk.Toplevel):
     def save_and_close(self): self.result_image = self.image.copy(); self.destroy()
 
 class AddItemDialog(simpledialog.Dialog):
+    def __init__(self, parent, title=None, initial=None):
+        """
+        initial: dict like {"desc": "...", "qty": 1, "unit_price": 9.99}
+        """
+        self.initial = initial or {}
+        super().__init__(parent, title=title)
+
     def body(self, master):
         ttk.Label(master, text="Description:").grid(row=0, column=0, sticky=tk.W)
         self.desc = ttk.Entry(master, width=50); self.desc.grid(row=0, column=1, padx=4, pady=2)
+
         ttk.Label(master, text="Qty:").grid(row=1, column=0, sticky=tk.W)
-        self.qty = ttk.Entry(master, width=10); self.qty.grid(row=1, column=1, sticky=tk.W, padx=4, pady=2); self.qty.insert(0, "1")
+        self.qty = ttk.Entry(master, width=10); self.qty.grid(row=1, column=1, sticky=tk.W, padx=4, pady=2)
+
         ttk.Label(master, text="Unit Price:").grid(row=2, column=0, sticky=tk.W)
-        self.unit = ttk.Entry(master, width=15); self.unit.grid(row=2, column=1, sticky=tk.W, padx=4, pady=2); self.unit.insert(0, "0.00")
+        self.unit = ttk.Entry(master, width=15); self.unit.grid(row=2, column=1, sticky=tk.W, padx=4, pady=2)
+
+        # Prefill if initial provided
+        desc = self.initial.get("desc", "")
+        qty = self.initial.get("qty", 1)
+        unit = self.initial.get("unit_price", self.initial.get("unit", 0.0))
+
+        self.desc.insert(0, str(desc))
+        self.qty.insert(0, str(qty))
+        self.unit.insert(0, f"{float(unit):.2f}" if unit is not None else "0.00")
+
         return self.desc
+
     def apply(self):
         try:
-            qty = float(self.qty.get()); unit = float(self.unit.get()); desc = self.desc.get().strip()
-            if not desc: raise ValueError("Description empty")
+            qty = float(self.qty.get())
+            unit = float(self.unit.get())
+            desc = self.desc.get().strip()
+            if not desc:
+                raise ValueError("Description empty")
+            # result keeps same keys your app expects
             self.result = {"desc": desc, "qty": qty, "unit_price": unit}
         except Exception as e:
-            messagebox.showerror("Invalid", f"Invalid item: {e}"); self.result = None
+            messagebox.showerror("Invalid", f"Invalid item: {e}")
+            self.result = None
 
 # ---------- Run ----------
 if __name__ == "__main__":
