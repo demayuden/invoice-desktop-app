@@ -4,6 +4,7 @@ MyInvoice — Sidebar version (Tkinter)
 Place icons in ./assets/icons/: home.png, invoice.png, receipts.png, reports.png, back.png
 """
 import os
+import sys
 import io
 import csv
 import json
@@ -27,7 +28,75 @@ styles.add(ParagraphStyle(name="Small", parent=styles["Normal"], fontSize=9, lea
 
 # ---------- Utility functions ----------
 def ensure_folder(path):
-    os.makedirs(path, exist_ok=True)
+    try:
+        os.makedirs(path, exist_ok=True)
+    except Exception:
+        # surfacing errors is not desired in production; just try to continue
+        pass
+
+def get_user_writable_invoices_dir(app_name="MyInvoice"):
+    """
+    Return a user-writable invoices folder path.
+    Preference:
+    1) 'invoices' next to script/exe (dev/portable) if writable
+    2) fallback to %LOCALAPPDATA%\<app_name>\invoices (user-writable)
+    Creates folder if necessary.
+    """
+    # determine base (exe folder if frozen, else script folder)
+    try:
+        base = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(__file__)
+    except Exception:
+        base = os.getcwd()
+
+    candidate = os.path.join(base, "invoices")
+
+    # try portable/dev location first
+    try:
+        os.makedirs(candidate, exist_ok=True)
+        return candidate
+    except PermissionError:
+        # not writable (e.g., Program Files) -> fall through to fallback
+        pass
+    except Exception:
+        pass
+
+    # fallback: use LOCALAPPDATA or APPDATA or home
+    localapp = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") or os.path.expanduser("~")
+    fallback_base = os.path.join(localapp, app_name)
+    invoices_fallback = os.path.join(fallback_base, "invoices")
+    try:
+        os.makedirs(invoices_fallback, exist_ok=True)
+        return invoices_fallback
+    except Exception as e:
+        # last resort: try current working dir invoices
+        try:
+            cwd_candidate = os.path.join(os.getcwd(), "invoices")
+            os.makedirs(cwd_candidate, exist_ok=True)
+            return cwd_candidate
+        except Exception:
+            raise RuntimeError(f"Failed to create invoices folder (tried {candidate} and {invoices_fallback}): {e}")
+
+def migrate_app_invoices_if_necessary(source_dir, target_dir):
+    """
+    If invoices exist in source_dir and target_dir differs, try to move PDFs/JSONs.
+    Safely skips files that already exist in target.
+    """
+    try:
+        if not os.path.isdir(source_dir) or os.path.abspath(source_dir) == os.path.abspath(target_dir):
+            return
+        for fn in os.listdir(source_dir):
+            if not fn.lower().endswith((".pdf", ".json")):
+                continue
+            src = os.path.join(source_dir, fn)
+            dst = os.path.join(target_dir, fn)
+            if not os.path.exists(dst):
+                try:
+                    shutil.move(src, dst)
+                except Exception:
+                    # ignore single-file failures
+                    pass
+    except Exception:
+        pass
 
 def currency(v):
     try:
@@ -296,7 +365,6 @@ def make_invoice(path, invoice):
 
 # ---------- Main App with Sidebar ----------
 ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets", "icons")
-ensure_folder(os.path.join(os.path.dirname(__file__), "invoices"))
 
 class SidebarApp(tk.Tk):
     def __init__(self):
@@ -312,7 +380,22 @@ class SidebarApp(tk.Tk):
         self.logo_thumbnail = None
         self.signature_image = None
         self.signature_thumbnail = None
-        self.invoices_folder = os.path.join(os.getcwd(), "invoices")
+
+        # determine invoices folder (use module-level helper)
+        try:
+            selected = get_user_writable_invoices_dir("MyInvoice")
+        except Exception:
+            # fallback to local invoices folder next to script
+            selected = os.path.join(os.path.dirname(__file__), "invoices")
+        # migrate old invoices (if any) from script folder to the selected folder
+        old_dev_invoices = os.path.join(os.path.dirname(__file__), "invoices")
+        if os.path.abspath(old_dev_invoices) != os.path.abspath(selected):
+            try:
+                migrate_app_invoices_if_necessary(old_dev_invoices, selected)
+            except Exception:
+                pass
+
+        self.invoices_folder = selected
         ensure_folder(self.invoices_folder)
 
         # trash folder + last_deleted for undo
@@ -431,6 +514,9 @@ class SidebarApp(tk.Tk):
             full = os.path.join(self.invoices_folder, name)
             if os.name == "nt":
                 os.startfile(full)
+            elif sys.platform == "darwin":
+                import subprocess
+                subprocess.Popen(["open", full])
             elif os.name == "posix":
                 import subprocess
                 subprocess.Popen(["xdg-open", full])
@@ -618,6 +704,9 @@ class SidebarApp(tk.Tk):
                 return
             if os.name == "nt":
                 os.startfile(pdf_fn)
+            elif sys.platform == "darwin":
+                import subprocess
+                subprocess.Popen(["open", pdf_fn])
             elif os.name == "posix":
                 import subprocess
                 subprocess.Popen(["xdg-open", pdf_fn])
@@ -951,9 +1040,10 @@ class InvoicePage(ttk.Frame):
 
     # ---------- build/save invoice ----------
     def build_invoice_data(self):
+        from_text = self.from_txt.get("1.0", tk.END).strip()
         inv = {
-            "company_name": self.from_txt.get("1.0", tk.END).strip().splitlines()[0] if self.from_txt.get("1.0", tk.END).strip() else "",
-            "company_address": self.from_txt.get("1.0", tk.END).strip(),
+            "company_name": from_text.splitlines()[0] if from_text else "",
+            "company_address": from_text,
             "invoice_number": self.inv_ent.get().strip(),
             "date": self.date_ent.get_date().isoformat() if hasattr(self.date_ent, "get_date") else self.date_ent.get().strip(),
             "bill_to": {"name": self.bill_txt.get("1.0", tk.END).strip().splitlines()[0], "contact": self.contact_ent.get().strip()},
@@ -977,8 +1067,10 @@ class InvoicePage(ttk.Frame):
             if not messagebox.askyesno("No items", "There are no items. Save anyway?"):
                 return
         inv = self.build_invoice_data()
-        base = inv.get("invoice_number", f"inv-{date.today().isoformat()}")
+        base = inv.get("invoice_number") or f"inv-{date.today().isoformat()}"
         safe = "".join(c for c in base if c.isalnum() or c in "-_")
+        if not safe:
+            safe = f"invoice-{date.today().isoformat()}"
         pdf_fn = os.path.join(self.app.invoices_folder, safe + ".pdf")
         json_fn = os.path.join(self.app.invoices_folder, safe + ".json")
 
