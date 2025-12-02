@@ -441,10 +441,29 @@ class SidebarApp(tk.Tk):
             if not sel:
                 return
             name = self.receipts_listbox.get(sel[0])
-            if not messagebox.askyesno("Delete", f"Delete {name}?"):
+            if not messagebox.askyesno("Delete", f"Delete {name}? This will also remove the matching JSON record if present."):
                 return
             full = os.path.join(self.invoices_folder, name)
-            os.remove(full)
+            # remove pdf
+            try:
+                os.remove(full)
+            except FileNotFoundError:
+                pass
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to delete PDF:\n{e}")
+                return
+
+            # also attempt to delete matching JSON (same base filename)
+            base = os.path.splitext(name)[0]
+            json_path = os.path.join(self.invoices_folder, base + ".json")
+            try:
+                if os.path.exists(json_path):
+                    os.remove(json_path)
+            except Exception as e:
+                # non-fatal, show a warning
+                messagebox.showwarning("Warning", f"PDF deleted but failed to delete JSON:\n{e}")
+
+            # refresh lists
             self.load_receipts_list()
             self.load_reports_table()
         except Exception as ex:
@@ -636,10 +655,12 @@ class InvoicePage(ttk.Frame):
         right_top.pack(side=tk.RIGHT, fill=tk.Y, padx=(8,0))
         right_top.pack_propagate(False)
 
+        # Logo frame: reduced height to avoid covering meta fields
         logo_frame = ttk.Frame(right_top, relief=tk.RIDGE, padding=8)
         logo_frame.pack(fill=tk.X)
         ttk.Label(logo_frame, text="Logo", font=("Segoe UI", 10, "bold")).pack()
-        logo_frame.config(height=120)
+        # smaller logo area so contact + due date remain visible
+        logo_frame.config(height=100)
         logo_frame.pack_propagate(False)
 
         btn_row = ttk.Frame(logo_frame)
@@ -647,25 +668,28 @@ class InvoicePage(ttk.Frame):
         ttk.Button(btn_row, text="Select Logo", command=self.choose_logo).pack(side=tk.LEFT)
         ttk.Button(btn_row, text="Clear", command=self.clear_logo).pack(side=tk.LEFT, padx=6)
 
-        self.logo_canvas = tk.Canvas(logo_frame, width=140, height=80, bg="#ffffff", highlightthickness=0)
+        # smaller canvas so it doesn't push meta down
+        self.logo_canvas = tk.Canvas(logo_frame, width=120, height=60, bg="#ffffff", highlightthickness=0)
         self.logo_canvas.pack(pady=(6,0))
         try:
-            self.logo_canvas.create_text(70, 40, text="No logo", fill="#777")
+            self.logo_canvas.create_text(60, 30, text="No logo", fill="#777")
         except Exception:
             pass
 
+        # meta placed directly below logo frame
         meta_frame = ttk.Frame(right_top, padding=(0,8))
         meta_frame.pack(fill=tk.X, pady=6)
+        # use grid so fields line up nicely
         ttk.Label(meta_frame, text="Invoice #").grid(row=0, column=0, sticky=tk.W)
-        self.inv_ent = ttk.Entry(meta_frame, width=20); self.inv_ent.grid(row=0, column=1, padx=6)
+        self.inv_ent = ttk.Entry(meta_frame, width=20); self.inv_ent.grid(row=0, column=1, padx=6, pady=2)
         ttk.Label(meta_frame, text="Invoice Date").grid(row=1, column=0, sticky=tk.W)
-        self.date_ent = DateEntry(meta_frame, width=18, date_pattern='yyyy-mm-dd'); self.date_ent.grid(row=1, column=1, padx=6)
+        self.date_ent = DateEntry(meta_frame, width=18, date_pattern='yyyy-mm-dd'); self.date_ent.grid(row=1, column=1, padx=6, pady=2)
         self.date_ent.set_date(date.today())
         ttk.Label(meta_frame, text="Due Date").grid(row=2, column=0, sticky=tk.W)
-        self.due_ent = DateEntry(meta_frame, width=18, date_pattern='yyyy-mm-dd'); self.due_ent.grid(row=2, column=1, padx=6)
+        self.due_ent = DateEntry(meta_frame, width=18, date_pattern='yyyy-mm-dd'); self.due_ent.grid(row=2, column=1, padx=6, pady=2)
         self.due_ent.set_date(date.today() + timedelta(days=15))
         ttk.Label(meta_frame, text="Contact").grid(row=3, column=0, sticky=tk.W)
-        self.contact_ent = ttk.Entry(meta_frame, width=20); self.contact_ent.grid(row=3, column=1, padx=6)
+        self.contact_ent = ttk.Entry(meta_frame, width=20); self.contact_ent.grid(row=3, column=1, padx=6, pady=2)
 
         # Items area
         items_frame = ttk.LabelFrame(self, text="Description / Amount", padding=8)
@@ -750,18 +774,18 @@ class InvoicePage(ttk.Frame):
 
         if pil:
             try:
-                max_w, max_h = 140, 80
+                max_w, max_h = 120, 60
                 pil.thumbnail((max_w, max_h), Image.LANCZOS)
                 self.logo_canvas.create_rectangle(0, 0, max_w, max_h, fill="#ffffff", outline="")
                 self.logo_thumbnail = ImageTk.PhotoImage(pil)
                 cx = max_w // 2; cy = max_h // 2
                 self.logo_canvas.create_image(cx, cy, image=self.logo_thumbnail, anchor="center")
             except Exception:
-                self.logo_canvas.create_text(70, 40, text=os.path.basename(getattr(self.app, "logo_path", "")), fill="#333")
+                self.logo_canvas.create_text(60, 30, text=os.path.basename(getattr(self.app, "logo_path", "")), fill="#333")
         else:
             try:
-                self.logo_canvas.create_rectangle(0, 0, 140, 80, fill="#ffffff", outline="")
-                self.logo_canvas.create_text(70, 40, text="No logo", fill="#777")
+                self.logo_canvas.create_rectangle(0, 0, 120, 60, fill="#ffffff", outline="")
+                self.logo_canvas.create_text(60, 30, text="No logo", fill="#777")
             except Exception:
                 pass
 
@@ -771,7 +795,7 @@ class InvoicePage(ttk.Frame):
         self.logo_thumbnail = None
         try:
             self.logo_canvas.delete("all")
-            self.logo_canvas.create_text(70, 40, text="No logo", fill="#777")
+            self.logo_canvas.create_text(60, 30, text="No logo", fill="#777")
         except Exception:
             pass
 
@@ -934,7 +958,8 @@ class ReportsPage(ttk.Frame):
             else:
                 self.app.reports_tree.column(c, width=90, anchor=tk.CENTER)
         self.app.reports_tree.pack(fill=tk.BOTH, expand=True, padx=8, pady=6)
-        self.app.reports_tree.bind("<Double-1>", lambda e: self.app.view_report_json())
+        # double-click opens PDF if exists
+        self.app.reports_tree.bind("<Double-1>", lambda e: self.app.open_pdf_from_report())
 
 # ---------- Signature canvas & AddItemDialog ----------
 class SignatureCanvas(tk.Toplevel):
