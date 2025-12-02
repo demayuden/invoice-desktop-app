@@ -1,0 +1,29 @@
+{
+  "company_name": "hsbb",
+  "company_address": "hsbb\nkl",
+  "invoice_number": "2235",
+  "date": "2025-12-02",
+  "bill_to": {
+    "name": "dema",
+    "contact": "011234444"
+  },
+  "items": [
+    {
+      "desc": "d1",
+      "qty": 1.0,
+      "unit_price": 1111.0
+    },
+    {
+      "desc": "d2",
+      "qty": 1.0,
+      "unit_price": 2222.0
+    }
+  ],
+  "tax_rate": 0.0,
+  "discount": 0.0,
+  "notes": "Payment is due within 15 days",
+  "logo_path": "C:/Users/User/OneDrive/Desktop/project pics/hurricane_sys_logo.jpg",
+  "signature_path": null,
+  "due_date": "2025-12-17",
+  "signature_saved_in_pdf_only": true
+}

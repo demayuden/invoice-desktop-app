@@ -1,13 +1,13 @@
 # app.py
 """
 MyInvoice — Sidebar version (Tkinter)
-Fast integration: sidebar + icons + embedded invoice page.
 Place icons in ./assets/icons/: home.png, invoice.png, receipts.png, reports.png, back.png
 """
 import os
 import io
 import csv
 import json
+import shutil
 from datetime import date, timedelta
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, simpledialog
@@ -315,6 +315,11 @@ class SidebarApp(tk.Tk):
         self.invoices_folder = os.path.join(os.getcwd(), "invoices")
         ensure_folder(self.invoices_folder)
 
+        # trash folder + last_deleted for undo
+        self.trash_folder = os.path.join(self.invoices_folder, ".trash")
+        ensure_folder(self.trash_folder)
+        self.last_deleted = None  # tuple (moved_pdf_path, moved_json_path)
+
         self._setup_style()
         self._create_layout()
         self.set_next_invoice_number()
@@ -350,7 +355,7 @@ class SidebarApp(tk.Tk):
         # content container
         self.container = ttk.Frame(body)
         self.container.pack(side="left", fill="both", expand=True)
-        
+
         # load icons (keep them on self to avoid GC)
         def load_icon(name, size=(26,26)):
             p = os.path.join(ASSETS_DIR, name)
@@ -365,7 +370,6 @@ class SidebarApp(tk.Tk):
                 print("Icon load error:", p, "->", e)
                 return None
 
-        # store icons on self so they are not garbage-collected
         self.icons = {
             "home": load_icon("home.png"),
             "invoice": load_icon("invoice.png"),
@@ -384,7 +388,7 @@ class SidebarApp(tk.Tk):
         # create pages (frames)
         self.pages = {}
         self.pages["home"] = HomePage(self.container, self)
-        self.pages["invoice"] = InvoicePage(self.container, self)    # main invoice UI
+        self.pages["invoice"] = InvoicePage(self.container, self)
         self.pages["receipts"] = ReceiptsPage(self.container, self)
         self.pages["reports"] = ReportsPage(self.container, self)
 
@@ -404,7 +408,7 @@ class SidebarApp(tk.Tk):
         if name == "reports":
             self.load_reports_table()
 
-    # ----------------- Receipt/Report helpers (same logic as before) ---------------
+    # ----------------- Receipt/Report helpers ---------------
     def load_receipts_list(self):
         try:
             lb = getattr(self, "receipts_listbox", None)
@@ -441,33 +445,115 @@ class SidebarApp(tk.Tk):
             if not sel:
                 return
             name = self.receipts_listbox.get(sel[0])
-            if not messagebox.askyesno("Delete", f"Delete {name}? This will also remove the matching JSON record if present."):
+            if not messagebox.askyesno("Delete", f"Delete {name}? This will move the matching JSON to trash and allow Undo."):
                 return
-            full = os.path.join(self.invoices_folder, name)
-            # remove pdf
-            try:
-                os.remove(full)
-            except FileNotFoundError:
-                pass
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to delete PDF:\n{e}")
-                return
+            full_pdf = os.path.join(self.invoices_folder, name)
 
-            # also attempt to delete matching JSON (same base filename)
+            # build expected json path (same base)
             base = os.path.splitext(name)[0]
             json_path = os.path.join(self.invoices_folder, base + ".json")
-            try:
-                if os.path.exists(json_path):
-                    os.remove(json_path)
-            except Exception as e:
-                # non-fatal, show a warning
-                messagebox.showwarning("Warning", f"PDF deleted but failed to delete JSON:\n{e}")
+
+            # move to trash (preserve name; if exists in trash, create unique name)
+            def move_to_trash(src):
+                if not os.path.exists(src):
+                    return None
+                dest = os.path.join(self.trash_folder, os.path.basename(src))
+                if os.path.exists(dest):
+                    i = 1
+                    base_n, ext_n = os.path.splitext(os.path.basename(src))
+                    while True:
+                        dest_try = os.path.join(self.trash_folder, f"{base_n}_{i}{ext_n}")
+                        if not os.path.exists(dest_try):
+                            dest = dest_try
+                            break
+                        i += 1
+                try:
+                    os.replace(src, dest)
+                    return dest
+                except Exception:
+                    try:
+                        shutil.copy2(src, dest)
+                        os.remove(src)
+                        return dest
+                    except Exception as e:
+                        print("Failed moving to trash:", e)
+                        return None
+
+            moved_pdf = move_to_trash(full_pdf)
+            moved_json = None
+            if os.path.exists(json_path):
+                moved_json = move_to_trash(json_path)
+
+            # Record last deleted so undo can restore
+            if moved_pdf or moved_json:
+                self.last_deleted = (moved_pdf, moved_json)
+            else:
+                self.last_deleted = None
 
             # refresh lists
             self.load_receipts_list()
             self.load_reports_table()
+
+            # notify user
+            if self.last_deleted:
+                messagebox.showinfo("Deleted", f"Moved to Trash. You can undo the last delete (Receipts -> Undo Delete).")
         except Exception as ex:
             messagebox.showerror("Error", f"Failed to delete:\n{ex}")
+
+    def undo_delete(self):
+        """Restore the last deleted PDF and JSON from trash back to invoices folder."""
+        if not getattr(self, "last_deleted", None):
+            messagebox.showinfo("Undo", "Nothing to undo.")
+            return
+
+        moved_pdf, moved_json = self.last_deleted
+        restored = []
+        errors = []
+
+        def restore(src):
+            if not src or not os.path.exists(src):
+                return None
+            dest = os.path.join(self.invoices_folder, os.path.basename(src))
+            if os.path.exists(dest):
+                i = 1
+                base, ext = os.path.splitext(os.path.basename(src))
+                while True:
+                    dest_try = os.path.join(self.invoices_folder, f"{base}_restored_{i}{ext}")
+                    if not os.path.exists(dest_try):
+                        dest = dest_try
+                        break
+                    i += 1
+            try:
+                os.replace(src, dest)
+                return dest
+            except Exception:
+                try:
+                    shutil.copy2(src, dest)
+                    os.remove(src)
+                    return dest
+                except Exception as e:
+                    return str(e)
+
+        if moved_pdf:
+            res = restore(moved_pdf)
+            if isinstance(res, str) and not os.path.exists(res):
+                errors.append(f"PDF: {res}")
+            else:
+                restored.append(res)
+        if moved_json:
+            res = restore(moved_json)
+            if isinstance(res, str) and not os.path.exists(res):
+                errors.append(f"JSON: {res}")
+            else:
+                restored.append(res)
+
+        if restored:
+            self.last_deleted = None
+            self.load_receipts_list()
+            self.load_reports_table()
+            messagebox.showinfo("Undo", f"Restored {len(restored)} file(s).")
+        else:
+            messagebox.showerror("Undo Failed", f"Failed to restore files: {errors}")
 
     # ---------- reports ----------
     def load_reports_table(self):
@@ -929,9 +1015,11 @@ class ReceiptsPage(ttk.Frame):
         self.app = app
         top = ttk.Frame(self, padding=8); top.pack(fill=tk.X)
         ttk.Label(top, text="Saved PDFs", font=("Segoe UI", 12, "bold")).pack(side=tk.LEFT)
-        ttk.Button(top, text="Refresh", command=self.app.load_receipts_list).pack(side=tk.RIGHT)
-        ttk.Button(top, text="Open Selected", command=self.app.open_selected_receipt).pack(side=tk.RIGHT, padx=6)
-        ttk.Button(top, text="Delete Selected", command=self.app.delete_selected_receipt).pack(side=tk.RIGHT)
+        btn_frame = ttk.Frame(top); btn_frame.pack(side=tk.RIGHT)
+        ttk.Button(btn_frame, text="Refresh", command=self.app.load_receipts_list).pack(side=tk.RIGHT)
+        ttk.Button(btn_frame, text="Open Selected", command=self.app.open_selected_receipt).pack(side=tk.RIGHT, padx=6)
+        ttk.Button(btn_frame, text="Delete Selected", command=self.app.delete_selected_receipt).pack(side=tk.RIGHT, padx=(6,0))
+        ttk.Button(btn_frame, text="Undo Delete", command=self.app.undo_delete).pack(side=tk.RIGHT, padx=(6,0))
         self.app.receipts_listbox = tk.Listbox(self)
         self.app.receipts_listbox.pack(fill=tk.BOTH, expand=True, padx=8, pady=6)
 
@@ -958,7 +1046,6 @@ class ReportsPage(ttk.Frame):
             else:
                 self.app.reports_tree.column(c, width=90, anchor=tk.CENTER)
         self.app.reports_tree.pack(fill=tk.BOTH, expand=True, padx=8, pady=6)
-        # double-click opens PDF if exists
         self.app.reports_tree.bind("<Double-1>", lambda e: self.app.open_pdf_from_report())
 
 # ---------- Signature canvas & AddItemDialog ----------
