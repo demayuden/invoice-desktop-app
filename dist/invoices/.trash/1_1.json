@@ -1,0 +1,17 @@
+{
+  "company_name": "Your Company Name",
+  "company_address": "Your Company Name\nAddress line 1\nAddress line 2",
+  "invoice_number": "1",
+  "date": "2025-12-02",
+  "bill_to": {
+    "name": "Customer Name",
+    "contact": ""
+  },
+  "items": [],
+  "tax_rate": 0.0,
+  "discount": 0.0,
+  "notes": "Payment is due within 15 days",
+  "logo_path": null,
+  "signature_path": null,
+  "due_date": "2025-12-17"
+}

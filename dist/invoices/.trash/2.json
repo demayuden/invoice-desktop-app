@@ -1,0 +1,29 @@
+{
+  "company_name": "Hurricane Systems Sdn. Bhd",
+  "company_address": "Hurricane Systems Sdn. Bhd\nKL\nBnadar Sri Damansara",
+  "invoice_number": "2",
+  "date": "2025-12-02",
+  "bill_to": {
+    "name": "Dema Yuden",
+    "contact": "01147584737"
+  },
+  "items": [
+    {
+      "desc": "Device1",
+      "qty": 1.0,
+      "unit_price": 1300.0
+    },
+    {
+      "desc": "Device2",
+      "qty": 1.0,
+      "unit_price": 5000.0
+    }
+  ],
+  "tax_rate": 0.0,
+  "discount": 200.0,
+  "notes": "Payment is due within 15 days",
+  "logo_path": null,
+  "signature_path": null,
+  "due_date": "2025-12-17",
+  "signature_saved_in_pdf_only": true
+}

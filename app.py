@@ -31,36 +31,23 @@ def ensure_folder(path):
     try:
         os.makedirs(path, exist_ok=True)
     except Exception:
-        # surfacing errors is not desired in production; just try to continue
         pass
 
 def get_user_writable_invoices_dir(app_name="MyInvoice"):
-    """
-    Return a user-writable invoices folder path.
-    Preference:
-    1) 'invoices' next to script/exe (dev/portable) if writable
-    2) fallback to %LOCALAPPDATA%\<app_name>\invoices (user-writable)
-    Creates folder if necessary.
-    """
-    # determine base (exe folder if frozen, else script folder)
     try:
         base = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(__file__)
     except Exception:
         base = os.getcwd()
 
     candidate = os.path.join(base, "invoices")
-
-    # try portable/dev location first
     try:
         os.makedirs(candidate, exist_ok=True)
         return candidate
     except PermissionError:
-        # not writable (e.g., Program Files) -> fall through to fallback
         pass
     except Exception:
         pass
 
-    # fallback: use LOCALAPPDATA or APPDATA or home
     localapp = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") or os.path.expanduser("~")
     fallback_base = os.path.join(localapp, app_name)
     invoices_fallback = os.path.join(fallback_base, "invoices")
@@ -68,7 +55,6 @@ def get_user_writable_invoices_dir(app_name="MyInvoice"):
         os.makedirs(invoices_fallback, exist_ok=True)
         return invoices_fallback
     except Exception as e:
-        # last resort: try current working dir invoices
         try:
             cwd_candidate = os.path.join(os.getcwd(), "invoices")
             os.makedirs(cwd_candidate, exist_ok=True)
@@ -77,10 +63,6 @@ def get_user_writable_invoices_dir(app_name="MyInvoice"):
             raise RuntimeError(f"Failed to create invoices folder (tried {candidate} and {invoices_fallback}): {e}")
 
 def migrate_app_invoices_if_necessary(source_dir, target_dir):
-    """
-    If invoices exist in source_dir and target_dir differs, try to move PDFs/JSONs.
-    Safely skips files that already exist in target.
-    """
     try:
         if not os.path.isdir(source_dir) or os.path.abspath(source_dir) == os.path.abspath(target_dir):
             return
@@ -93,7 +75,6 @@ def migrate_app_invoices_if_necessary(source_dir, target_dir):
                 try:
                     shutil.move(src, dst)
                 except Exception:
-                    # ignore single-file failures
                     pass
     except Exception:
         pass
@@ -385,9 +366,7 @@ class SidebarApp(tk.Tk):
         try:
             selected = get_user_writable_invoices_dir("MyInvoice")
         except Exception:
-            # fallback to local invoices folder next to script
             selected = os.path.join(os.path.dirname(__file__), "invoices")
-        # migrate old invoices (if any) from script folder to the selected folder
         old_dev_invoices = os.path.join(os.path.dirname(__file__), "invoices")
         if os.path.abspath(old_dev_invoices) != os.path.abspath(selected):
             try:
@@ -462,7 +441,7 @@ class SidebarApp(tk.Tk):
         }
 
         # sidebar buttons
-        ttk.Button(sidebar, text=" Home", image=self.icons["home"], compound="left", command=lambda: self.show_page("home")).pack(fill="x", padx=10, pady=(12,6))
+        ttk.Button(sidebar, text=" Home", image=self.icons["home"], compound="left", command=lambda: self.new_invoice()).pack(fill="x", padx=10, pady=(12,6))
         ttk.Button(sidebar, text=" Invoice", image=self.icons["invoice"], compound="left", command=lambda: self.show_page("invoice")).pack(fill="x", padx=10, pady=6)
         ttk.Button(sidebar, text=" Receipts", image=self.icons["receipts"], compound="left", command=lambda: self.show_page("receipts")).pack(fill="x", padx=10, pady=6)
         ttk.Button(sidebar, text=" Reports", image=self.icons["reports"], compound="left", command=lambda: self.show_page("reports")).pack(fill="x", padx=10, pady=6)
@@ -485,11 +464,21 @@ class SidebarApp(tk.Tk):
         page = self.pages.get(name)
         if page:
             page.lift()
-        # small refresh hooks
         if name == "receipts":
             self.load_receipts_list()
         if name == "reports":
             self.load_reports_table()
+
+    # ---------- New invoice helper ----------
+    def new_invoice(self):
+        try:
+            inv_page = self.pages.get("invoice")
+            if inv_page:
+                inv_page.clear_form()
+                self.set_next_invoice_number()
+                self.show_page("invoice")
+        except Exception as ex:
+            print("new_invoice failed:", ex)
 
     # ----------------- Receipt/Report helpers ---------------
     def load_receipts_list(self):
@@ -525,6 +514,40 @@ class SidebarApp(tk.Tk):
         except Exception as ex:
             messagebox.showerror("Error", f"Cannot open file:\n{ex}")
 
+    def edit_selected_receipt(self):
+        """
+        Load selected PDF's matching JSON metadata and open it in the Invoice page for editing.
+        Overwrite same PDF/JSON on save (invoice number remains same).
+        """
+        try:
+            sel = self.receipts_listbox.curselection()
+            if not sel:
+                messagebox.showinfo("Edit", "No receipt selected.")
+                return
+            name = self.receipts_listbox.get(sel[0])
+            base = os.path.splitext(name)[0]
+            json_path = os.path.join(self.invoices_folder, base + ".json")
+            pdf_path = os.path.join(self.invoices_folder, base + ".pdf")
+            if not os.path.exists(json_path):
+                messagebox.showwarning("Edit", f"No JSON metadata found for {name}.\nCannot edit PDF without metadata.")
+                return
+            try:
+                with open(json_path, "r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+            except Exception as e:
+                messagebox.showerror("Edit", f"Failed to load JSON metadata:\n{e}")
+                return
+
+            # call invoice page loader
+            inv_page = self.pages.get("invoice")
+            if not inv_page:
+                messagebox.showerror("Edit", "Invoice page not available.")
+                return
+            inv_page.load_invoice_data(data, editing_base=base)
+            self.show_page("invoice")
+        except Exception as ex:
+            messagebox.showerror("Edit Failed", f"{ex}")
+
     def delete_selected_receipt(self):
         try:
             sel = self.receipts_listbox.curselection()
@@ -534,12 +557,9 @@ class SidebarApp(tk.Tk):
             if not messagebox.askyesno("Delete", f"Delete {name}? This will move the matching JSON to trash and allow Undo."):
                 return
             full_pdf = os.path.join(self.invoices_folder, name)
-
-            # build expected json path (same base)
             base = os.path.splitext(name)[0]
             json_path = os.path.join(self.invoices_folder, base + ".json")
 
-            # move to trash (preserve name; if exists in trash, create unique name)
             def move_to_trash(src):
                 if not os.path.exists(src):
                     return None
@@ -570,24 +590,20 @@ class SidebarApp(tk.Tk):
             if os.path.exists(json_path):
                 moved_json = move_to_trash(json_path)
 
-            # Record last deleted so undo can restore
             if moved_pdf or moved_json:
                 self.last_deleted = (moved_pdf, moved_json)
             else:
                 self.last_deleted = None
 
-            # refresh lists
             self.load_receipts_list()
             self.load_reports_table()
 
-            # notify user
             if self.last_deleted:
                 messagebox.showinfo("Deleted", f"Moved to Trash. You can undo the last delete (Receipts -> Undo Delete).")
         except Exception as ex:
             messagebox.showerror("Error", f"Failed to delete:\n{ex}")
 
     def undo_delete(self):
-        """Restore the last deleted PDF and JSON from trash back to invoices folder."""
         if not getattr(self, "last_deleted", None):
             messagebox.showinfo("Undo", "Nothing to undo.")
             return
@@ -801,12 +817,14 @@ class HomePage(ttk.Frame):
     def __init__(self, parent, app: SidebarApp):
         super().__init__(parent)
         ttk.Label(self, text="Welcome to MyInvoice App", font=("Segoe UI", 18, "bold")).pack(pady=24)
-        ttk.Button(self, text="Create New Invoice", command=lambda: app.show_page("invoice")).pack()
+        ttk.Button(self, text="Create New Invoice", command=lambda: app.new_invoice()).pack()
 
 class InvoicePage(ttk.Frame):
     def __init__(self, parent, app: SidebarApp):
         super().__init__(parent)
         self.app = app
+        # track editing base filename (None when creating new)
+        self.editing_base = None
 
         # Top left: From / Bill To
         top = ttk.Frame(self)
@@ -834,7 +852,6 @@ class InvoicePage(ttk.Frame):
         logo_frame = ttk.Frame(right_top, relief=tk.RIDGE, padding=8)
         logo_frame.pack(fill=tk.X)
         ttk.Label(logo_frame, text="Logo", font=("Segoe UI", 10, "bold")).pack()
-        # smaller logo area so contact + due date remain visible
         logo_frame.config(height=100)
         logo_frame.pack_propagate(False)
 
@@ -843,7 +860,6 @@ class InvoicePage(ttk.Frame):
         ttk.Button(btn_row, text="Select Logo", command=self.choose_logo).pack(side=tk.LEFT)
         ttk.Button(btn_row, text="Clear", command=self.clear_logo).pack(side=tk.LEFT, padx=6)
 
-        # smaller canvas so it doesn't push meta down
         self.logo_canvas = tk.Canvas(logo_frame, width=120, height=60, bg="#ffffff", highlightthickness=0)
         self.logo_canvas.pack(pady=(6,0))
         try:
@@ -854,7 +870,6 @@ class InvoicePage(ttk.Frame):
         # meta placed directly below logo frame
         meta_frame = ttk.Frame(right_top, padding=(0,8))
         meta_frame.pack(fill=tk.X, pady=6)
-        # use grid so fields line up nicely
         ttk.Label(meta_frame, text="Invoice #").grid(row=0, column=0, sticky=tk.W)
         self.inv_ent = ttk.Entry(meta_frame, width=20); self.inv_ent.grid(row=0, column=1, padx=6, pady=2)
         ttk.Label(meta_frame, text="Invoice Date").grid(row=1, column=0, sticky=tk.W)
@@ -1063,14 +1078,24 @@ class InvoicePage(ttk.Frame):
         return inv
 
     def save_invoice_fullwidth(self):
+        """
+        If editing_base is set, overwrite files with that base name.
+        Otherwise save as new named by invoice_number field.
+        """
         if not self.app.items:
             if not messagebox.askyesno("No items", "There are no items. Save anyway?"):
                 return
         inv = self.build_invoice_data()
-        base = inv.get("invoice_number") or f"inv-{date.today().isoformat()}"
-        safe = "".join(c for c in base if c.isalnum() or c in "-_")
-        if not safe:
-            safe = f"invoice-{date.today().isoformat()}"
+
+        # choose filename base: editing mode or new
+        if getattr(self, "editing_base", None):
+            safe = self.editing_base
+        else:
+            base = inv.get("invoice_number") or f"inv-{date.today().isoformat()}"
+            safe = "".join(c for c in base if c.isalnum() or c in "-_")
+            if not safe:
+                safe = f"invoice-{date.today().isoformat()}"
+
         pdf_fn = os.path.join(self.app.invoices_folder, safe + ".pdf")
         json_fn = os.path.join(self.app.invoices_folder, safe + ".json")
 
@@ -1080,6 +1105,7 @@ class InvoicePage(ttk.Frame):
             messagebox.showerror("Error", f"Failed to create PDF:\n{e}")
             return
 
+        # write metadata (without in-memory images)
         safe_inv = dict(inv)
         safe_inv.pop("signature_image", None)
         safe_inv.pop("logo_image", None)
@@ -1093,13 +1119,166 @@ class InvoicePage(ttk.Frame):
             messagebox.showwarning("Warning", f"PDF saved but failed to save JSON metadata:\n{e}")
             return
 
+        # If we were editing an existing invoice, keep editing_base until user clears or creates new
         messagebox.showinfo("Saved", f"Saved PDF:\n{pdf_fn}\n\nSaved JSON:\n{json_fn}")
         self.app.load_receipts_list()
         self.app.load_reports_table()
         try:
-            self.app.set_next_invoice_number()
+            # If not editing, increment invoice number for next new invoice
+            if not getattr(self, "editing_base", None):
+                self.app.set_next_invoice_number()
         except Exception:
             pass
+
+    # ---------- load invoice data into page for editing ----------
+    def load_invoice_data(self, inv_data: dict, editing_base: str = None):
+        """
+        Populate the invoice page controls with data from inv_data (a dict).
+        Set self.editing_base to the base filename (without extension) to ensure
+        save overwrites the same files.
+        """
+        try:
+            self.editing_base = editing_base
+            # Company / address
+            comp_addr = inv_data.get("company_address", "") or inv_data.get("company_name", "")
+            self.from_txt.delete("1.0", tk.END)
+            self.from_txt.insert("1.0", comp_addr)
+
+            # invoice number (keep original)
+            inv_no = inv_data.get("invoice_number", "") or (editing_base or "")
+            self.inv_ent.delete(0, tk.END)
+            self.inv_ent.insert(0, str(inv_no))
+
+            # dates and contact
+            try:
+                if inv_data.get("date"):
+                    self.date_ent.set_date(inv_data.get("date"))
+                else:
+                    self.date_ent.set_date(date.today())
+            except Exception:
+                try:
+                    self.date_ent.set_date(date.today())
+                except Exception:
+                    pass
+            try:
+                if inv_data.get("due_date"):
+                    self.due_ent.set_date(inv_data.get("due_date"))
+                else:
+                    self.due_ent.set_date(date.today() + timedelta(days=15))
+            except Exception:
+                try:
+                    self.due_ent.set_date(date.today() + timedelta(days=15))
+                except Exception:
+                    pass
+
+            self.contact_ent.delete(0, tk.END)
+            self.contact_ent.insert(0, inv_data.get("bill_to", {}).get("contact", ""))
+
+            # bill to / items / tax / discount / notes
+            bill_name = inv_data.get("bill_to", {}).get("name", "")
+            self.bill_txt.delete("1.0", tk.END)
+            self.bill_txt.insert("1.0", bill_name)
+
+            # items: clear tree and app.items then populate
+            self.tree.delete(*self.tree.get_children())
+            self.app.items = []
+            for it in inv_data.get("items", []):
+                # normalize fields
+                try:
+                    qty = float(it.get("qty", 0))
+                except Exception:
+                    qty = 0.0
+                try:
+                    unitp = float(it.get("unit_price", it.get("unit", 0) or 0))
+                except Exception:
+                    unitp = 0.0
+                desc = it.get("desc", "") or it.get("description", "")
+                item = {"desc": desc, "qty": qty, "unit_price": unitp}
+                self.app.items.append(item)
+                amt = qty * unitp
+                qty_display = str(int(qty) if float(qty).is_integer() else qty)
+                self.tree.insert("", "end", values=("✖", desc, qty_display, f"{unitp:.2f}", f"{amt:.2f}"))
+
+            # tax/discount/notes
+            try:
+                self.tax_ent.delete(0, tk.END)
+                self.tax_ent.insert(0, str(inv_data.get("tax_rate", inv_data.get("tax_percent", 0.0)) or 0.0))
+            except Exception:
+                pass
+            try:
+                self.disc_ent.delete(0, tk.END)
+                self.disc_ent.insert(0, str(inv_data.get("discount", 0.0) or 0.0))
+            except Exception:
+                pass
+            self.terms_txt.delete("1.0", tk.END)
+            self.terms_txt.insert("1.0", inv_data.get("notes", ""))
+
+            # logo: try logo_path from json if present
+            self.app.logo_path = inv_data.get("logo_path", None)
+            self.app.logo_in_memory = None
+            if self.app.logo_path and os.path.exists(self.app.logo_path):
+                try:
+                    pil = Image.open(self.app.logo_path)
+                    self.app.logo_in_memory = pil_trim_whitespace(pil)
+                except Exception:
+                    self.app.logo_in_memory = None
+            self.update_logo_preview()
+
+            # signature: if json contained a signature_path we can load it
+            sig_path = inv_data.get("signature_path", None)
+            self.app.signature_image = None
+            if sig_path and os.path.exists(sig_path):
+                try:
+                    sig_img = Image.open(sig_path).convert("RGB")
+                    self.app.signature_image = sig_img
+                except Exception:
+                    self.app.signature_image = None
+            # if signature_saved_in_pdf_only is present we can't extract it here
+            self.update_signature_preview()
+
+            # totals update
+            self.app.update_totals()
+        except Exception as e:
+            messagebox.showerror("Load Invoice Failed", f"Failed to load invoice data:\n{e}")
+
+    def clear_form(self):
+        """Reset form to a fresh, empty invoice (clears editing state)."""
+        try:
+            self.editing_base = None
+            self.from_txt.delete("1.0", tk.END)
+            self.from_txt.insert("1.0", "Your Company Name\nAddress line 1\nAddress line 2")
+
+            self.bill_txt.delete("1.0", tk.END)
+            self.bill_txt.insert("1.0", "Customer Name")
+
+            self.inv_ent.delete(0, tk.END)
+            # invoice number will be set by caller (set_next_invoice_number)
+
+            self.date_ent.set_date(date.today())
+            self.due_ent.set_date(date.today() + timedelta(days=15))
+            self.contact_ent.delete(0, tk.END)
+
+            self.tree.delete(*self.tree.get_children())
+            self.app.items = []
+
+            self.tax_ent.delete(0, tk.END); self.tax_ent.insert(0, "0.00")
+            self.disc_ent.delete(0, tk.END); self.disc_ent.insert(0, "0.00")
+            self.terms_txt.delete("1.0", tk.END); self.terms_txt.insert("1.0", "Payment is due within 15 days")
+
+            # clear images
+            self.app.logo_path = None; self.app.logo_in_memory = None; self.logo_thumbnail = None
+            try:
+                self.logo_canvas.delete("all")
+                self.logo_canvas.create_text(60, 30, text="No logo", fill="#777")
+            except Exception:
+                pass
+
+            self.app.signature_image = None; self.app.signature_thumbnail = None
+            self.sig_preview_label.configure(text="No signature", image="")
+
+            self.app.update_totals()
+        except Exception as ex:
+            print("clear_form failed:", ex)
 
 class ReceiptsPage(ttk.Frame):
     def __init__(self, parent, app: SidebarApp):
@@ -1110,6 +1289,7 @@ class ReceiptsPage(ttk.Frame):
         btn_frame = ttk.Frame(top); btn_frame.pack(side=tk.RIGHT)
         ttk.Button(btn_frame, text="Refresh", command=self.app.load_receipts_list).pack(side=tk.RIGHT)
         ttk.Button(btn_frame, text="Open Selected", command=self.app.open_selected_receipt).pack(side=tk.RIGHT, padx=6)
+        ttk.Button(btn_frame, text="Edit Selected", command=self.app.edit_selected_receipt).pack(side=tk.RIGHT, padx=6)
         ttk.Button(btn_frame, text="Delete Selected", command=self.app.delete_selected_receipt).pack(side=tk.RIGHT, padx=(6,0))
         ttk.Button(btn_frame, text="Undo Delete", command=self.app.undo_delete).pack(side=tk.RIGHT, padx=(6,0))
         self.app.receipts_listbox = tk.Listbox(self)
