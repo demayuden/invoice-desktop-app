@@ -10,8 +10,8 @@ Compression=lzma
 SolidCompression=yes
 OutputDir=installer_build
 OutputBaseFilename=MyInvoice-Setup-1.0
-; Optional installer icon:
-; SetupIconFile=C:\Users\User\OneDrive\Desktop\invoice-app\assets\icons\invoice.ico
+; If you have a real .ico, keep this. Otherwise remove the line.
+SetupIconFile=C:\Users\User\OneDrive\Desktop\invoice-app\assets\icons\invoice.ico
 DisableProgramGroupPage=no
 AllowNoIcons=no
 PrivilegesRequired=lowest
@@ -22,14 +22,14 @@ CompressionThreads=2
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
-; Copy everything from the dist folder
-Source: "C:\Users\User\OneDrive\Desktop\invoice-app\dist\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Copy everything from your onedir PyInstaller output (app.exe and supporting files)
+Source: "C:\Users\User\OneDrive\Desktop\invoice-app\dist\app\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
-; Optional assets (only needed if assets isn’t inside dist)
+; Optional: include top-level assets if you keep them outside dist
 Source: "C:\Users\User\OneDrive\Desktop\invoice-app\assets\*"; DestDir: "{app}\assets"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\MyInvoice"; Filename: "{app}\app.exe"
+Name: "{group}\MyInvoice"; Filename: "{app}\myinvoiceapp.exe"
 Name: "{group}\Uninstall MyInvoice"; Filename: "{uninstallexe}"
 
 [Registry]

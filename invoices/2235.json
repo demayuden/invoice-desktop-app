@@ -1,24 +1,28 @@
 {
-  "company_name": "rfrfr",
-  "company_address": "rfrfr",
+  "company_name": "Hurricane Systems Sdn Bhd",
+  "company_address": "Hurricane Systems Sdn Bhd\nKL\nBSD",
   "invoice_number": "2235",
-  "date": "2025-12-02",
+  "date": "2025-12-03",
   "bill_to": {
-    "name": "rvf",
-    "contact": "3333"
+    "name": "hui",
+    "contact": "01140547149"
   },
   "items": [
     {
-      "desc": "vffvrfv",
+      "desc": "Laptop",
       "qty": 1.0,
-      "unit_price": 33.0
+      "unit_price": 1900.0
+    },
+    {
+      "desc": "phone",
+      "qty": 1.0,
+      "unit_price": 2000.0
     }
   ],
   "tax_rate": 0.0,
-  "discount": 0.0,
+  "discount": 500.0,
   "notes": "Payment is due within 15 days",
-  "logo_path": "C:/Users/User/OneDrive/Desktop/project pics/clock.png",
+  "logo_path": "C:/Users/User/OneDrive/Desktop/project pics/HS-Logo-Light.png",
   "signature_path": null,
-  "due_date": "2025-12-17",
-  "signature_saved_in_pdf_only": true
+  "due_date": "2025-12-18"
 }
